@@ -1,10 +1,5 @@
 package main
 
-// To Do:
-// 1. Add ability to prefix strings with the file index in hex.
-// 2. Add ability to search for specific strings, similar to a grep -i on the output.
-// 3. Add skip-string list.
-
 import (
 	"flag"
 	"fmt"
@@ -65,6 +60,7 @@ var (
 	// Debug Mode Data - used for extra-verbose output.
 	includedFileNames []string
 	excludedFileNames []string
+	searchStringsList []string
 	stringCount       = 0
 	utf16StringCount  = 0
 )
@@ -159,6 +155,7 @@ func main() {
 	var pVerbose = flag.Bool("v", false, "Writes the output to stdout.  This is always on if not writing files, but defaults off otherwise.")
 	var pDebug = flag.Bool("d", false, "Debug: Output directories and filenames, and stats.")
 	var pShowOffset = flag.Bool("x", false, "Hex Offset: Preface matches with their file offset.")
+	var pSearchList = flag.String("f", "", "Filter: Comma-delimited list of strings to find.  If not provided, all strings are returned.")
 
 	flag.Usage = func() {
 		PrintHelp()
@@ -221,6 +218,9 @@ func main() {
 			fmt.Printf("No files matching %s in %s found.\n", fileName, folder)
 			return
 		}
+	}
+	if len(*pSearchList) > *pMinLen {
+		searchStringsList = strings.Split(strings.ToUpper(*pSearchList), ",")
 	}
 
 	filesProcessed = RecurseDirectories(folder, *pRecurseDirs, fileName, minStr, *putf8, *putf16, *pAlphaRatio, *pSkipOlderMatch)
@@ -418,6 +418,15 @@ func VetString(src string, minLen int, minRatio int) bool {
 		if asciiChars*100/len(src) < minRatio {
 			return false
 		}
+	}
+	if len(searchStringsList) > 0 { // Determine if strings qualify
+		testString := strings.ToUpper(src)
+		for _, s := range searchStringsList {
+			if strings.Contains(testString, s) {
+				return true
+			}
+		}
+		return false
 	}
 	return true
 }
