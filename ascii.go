@@ -30,6 +30,11 @@ Yes, I still have a copy of ASCII.exe.  It runs fine in DOSBox-X.
 Simple usage: ascii <input file>
 This will extract standard ASCII, no UTF-8/16, that is six characters or longer, and output it to the console.
 
+TROUBLE-SHOOTING
+If some flags/options don't appear to be working, list them before the input file mask.
+If using a mask and it isn't working, either enclose the name in quotes or disable shell globbing to prevent the
+shell expanding the file list.  (e.g., in zsh, call as "noglob ascii ...")
+
 `
 
 /*
@@ -171,6 +176,12 @@ func main() {
 	writeStdOut = *pVerbose
 	writeOffset = *pShowOffset
 	// DirectoryInfo folder = new DirectoryInfo(Directory.GetCurrentDirectory());
+	if debugOutput {
+		fmt.Printf("All command-line options:\n")
+		flag.VisitAll(func(f *flag.Flag) {
+			fmt.Printf("%s: %s\n", f.Name, f.Value)
+		})
+	}
 	folder, _ := os.Getwd()
 	fileName := *pInputFilename
 	if minLen > 1 {
