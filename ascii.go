@@ -1,14 +1,14 @@
 package main
 
-// To Do: The only issue I currently see is that sometimes a character is snipped off the end of a string.
-// Which can cost the entire string if it wasn't long enough, so that's happening before the length check.
-// Found in UTF-16 mode.
+// To Do:
+// 1. Add ability to prefix strings with the file index in hex.
+// 2. Add ability to search for specific strings, similar to a grep -i on the output.
+// 3. Add skip-string list.
 
 import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,6 +59,7 @@ var (
 	writeFiles  = false
 	writePath   = ""
 	writeStdOut = false
+	writeOffset = false
 	startPath   = ""
 	// Used for file masks.
 	// Debug Mode Data - used for extra-verbose output.
@@ -76,7 +77,7 @@ func IIF(cond bool, str1 string, str2 string) string {
 }
 
 func PrintHelp() {
-	fmt.Fprintf(os.Stderr, description)
+	fmt.Fprintf(os.Stderr, "%s\n", description)
 	flag.PrintDefaults()
 }
 
@@ -156,7 +157,8 @@ func main() {
 	var pAlphaRatio = flag.Int("alpha-ratio", 0, "Percentage required alphanumeric+,. in a string.  Default is 0 - no requirement.  80 should reduce noise.")
 	var pRecurseDirs = flag.Bool("r", false, "Recurse Directories")
 	var pVerbose = flag.Bool("v", false, "Writes the output to stdout.  This is always on if not writing files, but defaults off otherwise.")
-	var pDebug = flag.Bool("d", false, "Debug - output directories and filenames, and stats.")
+	var pDebug = flag.Bool("d", false, "Debug: Output directories and filenames, and stats.")
+	var pShowOffset = flag.Bool("x", false, "Hex Offset: Preface matches with their file offset.")
 
 	flag.Usage = func() {
 		PrintHelp()
@@ -170,6 +172,7 @@ func main() {
 	writeFiles = *pWriteOutput
 	writePath = *pWriteOutputPath
 	writeStdOut = *pVerbose
+	writeOffset = *pShowOffset
 	// DirectoryInfo folder = new DirectoryInfo(Directory.GetCurrentDirectory());
 	folder, _ := os.Getwd()
 	fileName := *pInputFilename
@@ -179,7 +182,7 @@ func main() {
 
 	if len(InputFileName) == 0 {
 		if debugOutput {
-			fmt.Printf("i = %s, minLen = %d, o = %s\n", InputFileName, minLen, writeFiles)
+			fmt.Printf("i = %s, minLen = %d, o = %s\n", InputFileName, minLen, IIF(writeFiles, "true", "false"))
 		}
 		fmt.Printf("Error: input is required.  (The program can't do much without it.)\n")
 		PrintHelp()
@@ -264,6 +267,13 @@ func RecurseDirectories(folder string, recurse bool, fileMask string, minLen int
 	return dirCount
 }
 
+func MatchStartUpdate(curMatch int, curFileIndex int) int {
+	if curMatch == -1 {
+		return curFileIndex
+	}
+	return curMatch
+}
+
 // / <summary>
 // / Extract ASCII or UTF8 data from one file.
 // / </summary>
@@ -288,49 +298,60 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 	workString := ""
 	resultString := ""
 
-	fileIndex := 0
+	fileIndex := 0   // Tracks current position of pointer
+	matchStart := -1 // -1 when not in a string.  Current first char index when in one.
 	isCharacterValid := false
+	stringHasUTF16 := false
 	newChar := ""
 
 	for fileIndex < len(fileContents) {
+		foundChar := false
+		newIndex := -1
 		// Try UTF16 first, if enabled, because safer on the index.  This call checks for minLen.
 		if utf16Mode {
-			var newIndex int // if the character is valid.
 			isCharacterValid, newChar, newIndex = GetUTF16String(fileContents, fileIndex, minimumMatchLength)
 			if isCharacterValid {
 				// We should seldom have a workString already.  Log it if we do.  (Yes, double-vetting, but diff. lengths.)
-				fileIndex = newIndex
-				if VetString(workString, int(math.Min(3.0, float64(minimumMatchLength))), alphaRatio) {
-					workString = strings.TrimSpace(workString)
-					fmt.Printf("ASCII Error: UTF-16 found appending ASCII.\nASCII: %ss\nUTF-16: %s\n", workString, newChar)
-					workString += SepChar + newChar
-				} else {
-					workString = newChar
+				if matchStart == -1 {
+					matchStart = fileIndex
 				}
-				if VetString(workString, minimumMatchLength, alphaRatio) {
-					resultString += workString + SepChar
-					utf16StringCount++
-				}
-				workString = ""
+				foundChar = true
+				stringHasUTF16 = true
 			}
 		}
 
-		isCharacterValid, newChar, fileIndex = GetChar(fileContents, fileIndex, utf8Mode)
-		if isCharacterValid {
+		if !foundChar {
+			isCharacterValid, newChar, newIndex = GetChar(fileContents, fileIndex, utf8Mode)
+			if isCharacterValid {
+				foundChar = true
+			}
+		}
+		// The logic here is, UTF16 will grab the entire string at once, so it needs to be closed off.
+		if foundChar { // && !stringHasUTF16 {
+			if newIndex == -1 {
+				fmt.Println("Error: New index wrong.")
+				os.Exit(1)
+			}
+			fileIndex = newIndex
+			matchStart = MatchStartUpdate(matchStart, fileIndex)
 			workString += newChar
-		} else { // Invalid - but check to see if we should write str
+		} else { // Char was Invalid - Check to see if we should write string
 			if VetString(workString, minimumMatchLength, alphaRatio) {
+				if writeOffset {
+					resultString += fmt.Sprintf("%08X: ", matchStart)
+				}
 				resultString += workString + SepChar
 				stringCount++
+				if stringHasUTF16 {
+					utf16StringCount++
+					stringHasUTF16 = false
+				}
 			}
+			fileIndex = newIndex
 			workString = ""
+			matchStart = -1
 		}
 	}
-	if VetString(workString, minimumMatchLength, alphaRatio) {
-		resultString += workString + SepChar
-		stringCount++
-	}
-	workString = ""
 
 	// string ascii = System.Text.ASCIIEncoding.ASCII.GetString(dest.ToArray<byte>());
 	if (!writeFiles) || (writeStdOut) {
@@ -508,7 +529,8 @@ func GetUTF16String(src []byte, index int, minLen int) (bool, string, int) {
 		success = false // Failure.
 	}
 	if (success) && (len(foundString) >= minLen) { // Got the null terminator
-		index = index + 2
+		// Skip this so that the nulls get processed subsequently
+		// index = index + 2
 	} else {
 		success = false // Not successful if too short.
 	}
