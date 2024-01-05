@@ -168,7 +168,6 @@ func main() {
 	flag.Parse()
 	InputFileName := *pInputFilename
 	minLen := *pMinLen
-	filesProcessed := 0 // Does not count those skipped, e.g. redundants.
 	minStr := 6
 	debugOutput = *pDebug
 	writeFiles = *pWriteOutput
@@ -181,6 +180,7 @@ func main() {
 		flag.VisitAll(func(f *flag.Flag) {
 			fmt.Printf("%s: %s\n", f.Name, f.Value)
 		})
+		fmt.Printf("Full Line:\n%s\n", os.Args)
 	}
 	folder, _ := os.Getwd()
 	fileName := *pInputFilename
@@ -234,16 +234,20 @@ func main() {
 		searchStringsList = strings.Split(strings.ToUpper(*pSearchList), ",")
 	}
 
-	filesProcessed = RecurseDirectories(folder, *pRecurseDirs, fileName, minStr, *putf8, *putf16, *pAlphaRatio, *pSkipOlderMatch)
+	directoriesProcessed, filesProcessed := RecurseDirectories(folder, *pRecurseDirs, fileName, minStr, *putf8, *putf16, *pAlphaRatio, *pSkipOlderMatch)
 	if debugOutput {
-
+		fmt.Printf("Processed %d directories.\n", directoriesProcessed)
 		fmt.Printf("Processed %d files:\n", filesProcessed)
 		for _, fname := range includedFileNames {
 			fmt.Println(fname)
 		}
-		fmt.Println("Excluded Files:")
-		for _, fname := range excludedFileNames {
-			fmt.Println(fname)
+		if len(excludedFileNames) > 0 {
+			fmt.Println("Excluded Files:")
+			for _, fname := range excludedFileNames {
+				fmt.Println(fname)
+			}
+		} else {
+			fmt.Println("No files excluded.")
 		}
 
 		fmt.Printf("Found %d ASCII/UTF-8 strings and %d UTF-16 strings.", stringCount, utf16StringCount)
@@ -260,22 +264,25 @@ func main() {
 // / <param name="alphaRatio">Pass-Through, default 0.  How much of string must be alpha rather than punctuation/numeric?</param>
 // / <param name="skipOlderMatch">Pass-Through, used to only grab newest matching file.</param>
 // / <returns></returns>
-func RecurseDirectories(folder string, recurse bool, fileMask string, minLen int, utf8 bool, utf16 bool, alphaRatio int, skipOlderMatch string) int {
-	dirCount := 1
+func RecurseDirectories(folder string, recurse bool, fileMask string, minLen int, utf8 bool, utf16 bool, alphaRatio int, skipOlderMatch string) (dirCount int, fileCount int) {
+	dirCount = 1
 	dirs, files := filesInDirectory(folder, fileMask, SORTBY_DATE, false)
 
 	baseNames = nil // File matching is per-directory
 	for _, file := range files {
 		AsciifyFile(folder, file, minLen, utf8, alphaRatio, skipOlderMatch, utf16)
+		fileCount++
 	}
 
 	if recurse {
 		for _, dir := range dirs {
-			dirCount += RecurseDirectories(filepath.Join(folder, dir), recurse, fileMask, minLen, utf8, utf16, alphaRatio, skipOlderMatch)
+			newDirs, newFiles := RecurseDirectories(filepath.Join(folder, dir), recurse, fileMask, minLen, utf8, utf16, alphaRatio, skipOlderMatch)
+			dirCount += newDirs
+			fileCount += newFiles
 		}
 	}
 
-	return dirCount
+	return dirCount, fileCount
 }
 
 func MatchStartUpdate(curMatch int, curFileIndex int) int {
