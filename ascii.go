@@ -30,6 +30,17 @@ Yes, I still have a copy of ASCII.exe.  It runs fine in DOSBox-X.
 Simple usage: ascii <input file>
 This will extract standard ASCII, no UTF-8/16, that is six characters or longer, and output it to the console.
 
+USAGE NOTES
+(Beyond what's in the parameter help.)
+
+ -o, -p are for writing found text to files.  -o puts it next to the original, -p puts it in a flattened name 
+in the specified directory.  Good for indexing search data.
+
+ -skip-older-match is for when there are different revisions of the same file, with the version or date in the 
+file name.  As long as it's at the END of the file name, this can be used to scan only the most recent (by
+file modification time.)  e.g. for foo@2.0.db, use "@", for foo(2023-12-12).rtf use "(".  This is useful for
+creating text indexes of non-text files.  (e.g. allowing Spotlight to index non-text documents with some text in them.)
+
 TROUBLE-SHOOTING
 If some flags/options don't appear to be working, list them before the input file mask.
 If using a mask and it isn't working, either enclose the name in quotes or disable shell globbing to prevent the
@@ -54,18 +65,19 @@ shell expanding the file list.  (e.g., in zsh, call as "noglob ascii ...")
 */
 
 var (
-	baseNames   []string
-	debugOutput = false
-	writeFiles  = false
-	writePath   = ""
-	writeStdOut = false
-	writeOffset = false
-	startPath   = ""
+	baseNames    []string
+	debugOutput  = false
+	writeFiles   = false
+	writePath    = ""
+	writeVerbose = false
+	writeOffset  = false
+	startPath    = ""
 	// Used for file masks.
 	// Debug Mode Data - used for extra-verbose output.
 	includedFileNames []string
 	excludedFileNames []string
 	searchStringsList []string
+	suppressList      []string
 	stringCount       = 0
 	utf16StringCount  = 0
 )
@@ -149,7 +161,7 @@ func filesInDirectory(target string, filemask string, sortby SORTBY, ascending b
 
 func main() {
 	var pInputFilename = flag.String("i", "", "Filename or mask to parse.  Assumes CWD.")
-	var pMinLen = flag.Int("min-len", 6, "Minimum length of ASCII characters to grab. ")
+	var pMinLen = flag.Int("min-len", 6, "How many ASCII (or UTF) characters must be found in a row to make a qualifying string. Too few and you'll get a lot of junk.")
 	var pWriteOutput = flag.Bool("o", false, "Should files, less extension plus .txt, be written?  Default: False")
 	var pWriteOutputPath = flag.String("p", "", "Path to write output to, if different from source.  Implies flattening from dir1/dir2/filename to dir1-dir2-filename.")
 	var putf8 = flag.Bool("utf8", false, "Include value UTF8 characters.  (Default is pure lower-bit ASCII.)\nWarning: Lots of junk looks like UTF-8.  Non-UTF8 is usually cleaner.")
@@ -157,10 +169,11 @@ func main() {
 	var pSkipOlderMatch = flag.String("skip-older-match", "", "For files with dates/incrementors in their names, allows grabbing the newest that don't differ until this string.\n(e.g. notes_20220212.txt, notes_20211220.txt, pass '_' and only the newest is processed.  Case-Sensitive.)\nPer Directory.")
 	var pAlphaRatio = flag.Int("alpha-ratio", 0, "Percentage required alphanumeric+,. in a string.  Default is 0 - no requirement.  80 should reduce noise.")
 	var pRecurseDirs = flag.Bool("r", false, "Recurse Directories")
-	var pVerbose = flag.Bool("v", false, "Writes the output to stdout.  This is always on if not writing files, but defaults off otherwise.")
+	var pVerbose = flag.Bool("v", false, "Verbose + Writes the output to stdout.  StdOut is always on if not writing files, but defaults off otherwise.")
 	var pDebug = flag.Bool("d", false, "Debug: Output directories and filenames, and stats.")
 	var pShowOffset = flag.Bool("x", false, "Hex Offset: Preface matches with their file offset.")
 	var pSearchList = flag.String("f", "", "Filter: Comma-delimited list of strings to find.  If not provided, all strings are returned.")
+	var pSuppressList = flag.String("suppress", "", "Comma-delimited list of strings to suppress.  e.g. font names.  Matching strings are not reported.")
 
 	flag.Usage = func() {
 		PrintHelp()
@@ -172,7 +185,7 @@ func main() {
 	debugOutput = *pDebug
 	writeFiles = *pWriteOutput
 	writePath = *pWriteOutputPath
-	writeStdOut = *pVerbose
+	writeVerbose = *pVerbose
 	writeOffset = *pShowOffset
 	// DirectoryInfo folder = new DirectoryInfo(Directory.GetCurrentDirectory());
 	if debugOutput {
@@ -232,6 +245,9 @@ func main() {
 	}
 	if len(*pSearchList) > *pMinLen {
 		searchStringsList = strings.Split(strings.ToUpper(*pSearchList), ",")
+	}
+	if len(*pSuppressList) > *pMinLen {
+		suppressList = strings.Split(strings.ToUpper(*pSuppressList), ",")
 	}
 
 	directoriesProcessed, filesProcessed := RecurseDirectories(folder, *pRecurseDirs, fileName, minStr, *putf8, *putf16, *pAlphaRatio, *pSkipOlderMatch)
@@ -304,7 +320,7 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 		return false
 	}
 	includedFileNames = append(includedFileNames, fullFileName)
-	if debugOutput {
+	if writeVerbose {
 		fmt.Printf("File: %s in Folder: %s\n", file, folder)
 	}
 
@@ -372,7 +388,7 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 	}
 
 	// string ascii = System.Text.ASCIIEncoding.ASCII.GetString(dest.ToArray<byte>());
-	if (!writeFiles) || (writeStdOut) {
+	if (!writeFiles) || (writeVerbose) {
 		fmt.Println(resultString)
 	}
 
@@ -435,6 +451,16 @@ func VetString(src string, minLen int, minRatio int) bool {
 		}
 		if asciiChars*100/len(src) < minRatio {
 			return false
+		}
+	}
+
+	// Determine if string should be suppressed.
+	if len(suppressList) > 0 {
+		testString := strings.ToUpper(src)
+		for _, s := range suppressList {
+			if testString == s {
+				return false
+			}
 		}
 	}
 	if len(searchStringsList) > 0 { // Determine if strings qualify
