@@ -187,6 +187,9 @@ func main() {
 	writePath = *pWriteOutputPath
 	writeVerbose = *pVerbose
 	writeOffset = *pShowOffset
+	if len(os.Args) == 2 && len(InputFileName) == 0 { // Not enough for a flag
+		InputFileName = os.Args[1]
+	}
 	// DirectoryInfo folder = new DirectoryInfo(Directory.GetCurrentDirectory());
 	if debugOutput {
 		fmt.Printf("All command-line options:\n")
@@ -196,7 +199,7 @@ func main() {
 		fmt.Printf("Full Line:\n%s\n", os.Args)
 	}
 	folder, _ := os.Getwd()
-	fileName := *pInputFilename
+	fileName := InputFileName
 	if minLen > 1 {
 		minStr = minLen
 	}
