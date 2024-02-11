@@ -38,6 +38,6 @@ then
     echo go install -v -ldflags "$FLAG"
 else
     echo 'go build'
-    echo go build -v -ldflags "$FLAG"
+    go build -v -ldflags \"$FLAG\"
 fi
 

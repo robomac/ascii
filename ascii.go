@@ -208,6 +208,7 @@ func main() {
 
 	if *pVersion { // Print about data and exit.
 		fmt.Printf("ascii by robomac version %s\n", IIF(len(GitTag) == 0, "0.0", GitTag))
+		os.Exit(0)
 	}
 
 	if len(os.Args) == 2 && len(InputFileName) == 0 { // Not enough for a flag
