@@ -11,8 +11,13 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/robomac/archiver"
 )
 
+// if starts with PK or 7z, handle differently.  e.g. word docx files.
+// 50 4B 03 04 : zip, open doc, etc.
+// 37 7A BC AF 27 1C : 7z
 // Sample CMD I used:
 // del "D:\WinSoft\Docs\OneNote.backups\16.0\Backup\*.one.txt" /s
 // D:\Dev\Projects\ASCII\ASCII\bin\Release\net6 .0\publish\win - x64\ASCII.exe - i "D:\WinSoft\Docs\OneNote.backups\16.0\Backup\Main Notebook\*.one"--min - len 6--skip - older - match "(" - o - d--alpha - ratio 85--utf16--utf8
@@ -78,8 +83,18 @@ var (
 	excludedFileNames []string
 	searchStringsList []string
 	suppressList      []string
+	noExpansion       = false // Set to true to skip expanding DOC and other PK files.  Does not recursively enter them though.
 	stringCount       = 0
 	utf16StringCount  = 0
+)
+
+// These are filled in by the build script
+// build flags
+var (
+	BuildTime  string
+	CommitHash string
+	GoVersion  string
+	GitTag     string
 )
 
 func IIF(cond bool, str1 string, str2 string) string {
@@ -174,6 +189,8 @@ func main() {
 	var pShowOffset = flag.Bool("x", false, "Hex Offset: Preface matches with their file offset.")
 	var pSearchList = flag.String("f", "", "Filter: Comma-delimited list of strings to find.  If not provided, all strings are returned.")
 	var pSuppressList = flag.String("suppress", "", "Comma-delimited list of strings to suppress.  e.g. font names.  Matching strings are not reported.")
+	var pNoExpansions = flag.Bool("nozip", false, "Don't expand compressed files such as DOCX, XLSX...")
+	var pVersion = flag.Bool("version", false, "Print version information.")
 
 	flag.Usage = func() {
 		PrintHelp()
@@ -187,6 +204,12 @@ func main() {
 	writePath = *pWriteOutputPath
 	writeVerbose = *pVerbose
 	writeOffset = *pShowOffset
+	noExpansion = *pNoExpansions
+
+	if *pVersion { // Print about data and exit.
+		fmt.Printf("ascii by robomac version %s\n", IIF(len(GitTag) == 0, "0.0", GitTag))
+	}
+
 	if len(os.Args) == 2 && len(InputFileName) == 0 { // Not enough for a flag
 		InputFileName = os.Args[1]
 	}
@@ -289,7 +312,27 @@ func RecurseDirectories(folder string, recurse bool, fileMask string, minLen int
 
 	baseNames = nil // File matching is per-directory
 	for _, file := range files {
-		AsciifyFile(folder, file, minLen, utf8, alphaRatio, skipOlderMatch, utf16)
+		fileHandled := false
+		if !noExpansion {
+			pArchive, _ := archiver.GetArchiveInfo(filepath.Join(folder, file))
+			if pArchive != nil && pArchive.ArchiveType > archiver.ARCHIVE_NA {
+				// Handle binary bits.  Trouble is... as a file.
+				for _, compressedFile := range pArchive.Files() {
+					fileContent, err := compressedFile.GetBytes()
+					if err != nil {
+						if writeVerbose {
+							fmt.Printf("Decompression error in %s / %s: %s\n", compressedFile.Path(), compressedFile.Name(), err.Error())
+						}
+					} else if len(fileContent) > minLen {
+						asciifyBlob(folder, file+"-"+compressedFile.Name(), fileContent, minLen, utf8, alphaRatio, skipOlderMatch, utf16)
+						fileHandled = true
+					}
+				}
+			}
+		}
+		if !fileHandled { // Don't examine binary archives that we've checked inside.
+			AsciifyFile(folder, file, minLen, utf8, alphaRatio, skipOlderMatch, utf16)
+		}
 		fileCount++
 	}
 
@@ -316,7 +359,6 @@ func MatchStartUpdate(curMatch int, curFileIndex int) int {
 // / </summary>
 // / <returns>Was a file processed?  (False if it couldn't be opened or was redundant.)</returns>
 func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bool, alphaRatio int, oldMatchString string, utf16Mode bool) bool {
-	SepChar := "\n"
 	fullFileName := filepath.Join(folder, file)
 	if !PassesFileMatch(file, oldMatchString) { // Have we seen this basefile before?
 		excludedFileNames = append(excludedFileNames, fullFileName)
@@ -332,6 +374,11 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 		fmt.Printf("ERROR: %s / %s: %s\n", folder, file, err.Error())
 		return false
 	}
+	return asciifyBlob(folder, file, fileContents, minimumMatchLength, utf8Mode, alphaRatio, oldMatchString, utf16Mode)
+}
+
+func asciifyBlob(folder string, file string, fileContents []byte, minimumMatchLength int, utf8Mode bool, alphaRatio int, oldMatchString string, utf16Mode bool) bool {
+	SepChar := "\n"
 	workString := ""
 	resultString := ""
 
@@ -372,7 +419,9 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 			fileIndex = newIndex
 			matchStart = MatchStartUpdate(matchStart, fileIndex)
 			workString += newChar
-		} else { // Char was Invalid - Check to see if we should write string
+		}
+		if !foundChar || fileIndex+1 == len(fileContents) {
+			// Char was Invalid or EOF - Check to see if we should write string
 			if VetString(workString, minimumMatchLength, alphaRatio) {
 				if writeOffset {
 					resultString += fmt.Sprintf("%08X: ", matchStart)
@@ -397,7 +446,7 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 
 	if writeFiles {
 		if len(writePath) == 0 {
-			err = os.WriteFile(filepath.Join(folder, file)+".txt", []byte(resultString), 0644)
+			err := os.WriteFile(filepath.Join(folder, file)+".txt", []byte(resultString), 0644)
 			if err != nil {
 				fmt.Printf("File Write Error to %s - %s: %s\n", folder, file, err.Error())
 			}
@@ -410,7 +459,7 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 			if debugOutput {
 				fmt.Printf("Writing %s to %s.\n", writePath, newFileName)
 			}
-			err = os.WriteFile(filepath.Join(writePath, newFileName), []byte(resultString), 0644)
+			err := os.WriteFile(filepath.Join(writePath, newFileName), []byte(resultString), 0644)
 
 			if err != nil {
 				fmt.Printf("File Write Error to %s - %s: %s\n", folder, file, err.Error())
@@ -421,7 +470,7 @@ func AsciifyFile(folder string, file string, minimumMatchLength int, utf8Mode bo
 }
 
 // C# inline function equivalent
-func isASCII(b byte) bool {
+func isCharacterASCII(b byte) bool {
 	return (((b > 31) && (b < 127)) || (b == 9) || (b == 10))
 }
 
@@ -505,7 +554,7 @@ func GetChar(src []byte, startIndex int, UTF8 bool) (bool, string, int) {
 	b := src[startIndex]
 	startIndex++ // ASCII always increments counter by 1.
 	// This check is true for first character always.
-	if isASCII(b) { // (((b > 31) && (b < 127)) || (b == 9) || (b == 10))   // Valid character
+	if isCharacterASCII(b) { // (((b > 31) && (b < 127)) || (b == 9) || (b == 10))   // Valid character
 		chars += string(b)
 		return true, chars, startIndex
 	}
@@ -574,7 +623,7 @@ func GetUTF16String(src []byte, index int, minLen int) (bool, string, int) {
 			success = false
 			break
 		}
-		if (isASCII(src[index])) && (src[index+1] == 0) { // Valid ASCII
+		if (isCharacterASCII(src[index])) && (src[index+1] == 0) { // Valid ASCII
 			foundString += string(src[index])
 			index += 2
 			continue
